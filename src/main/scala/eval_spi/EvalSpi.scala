@@ -8,12 +8,12 @@ import spinal.lib.fsm._
 class EvalSpiMaster(dataWidth : Int) extends SpiMaster{
   val go = Bool()
   val done = Bool()
-  val mosiDataPayload = Bits(dataWidth bits)  // 输送数据
-  val misoDataPayload = Reg(Bits(dataWidth bits))  // 接收数据
+  val write = Flow (Bits(dataWidth bits))  // 输送数据
+  val read = Flow ((Bits(dataWidth bits)))  // 接收数据
 
   override def asMaster(): Unit = {
-    out(ss, sclk, mosi, done, misoDataPayload)
-    in(go, miso, mosiDataPayload)
+    out(ss, sclk, mosi, done, read)
+    in(go, miso, write)
   }
 }
 
@@ -23,7 +23,7 @@ class EvalSpi(dataWidth : Int=24,
               CPHA : Boolean=false) extends Component{
   val io = new EvalSpiMaster(dataWidth=dataWidth)
   io.asMaster()
-  io.misoDataPayload.setAll()
+  io.read.setAll()
 //  val clk,rst_n = in Bool()
 //  val myClockDomain = ClockDomain(clk, rst_n)
 //  new ClockingArea(myClockDomain) {
