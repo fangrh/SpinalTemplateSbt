@@ -3,139 +3,82 @@ package eval_spi
 import spinal.core._
 import spinal.lib._
 import com.spi._
-import spinal.lib.fsm._
+import spinal.core.sim._
+//import spinal.core.
 
-class EvalSpiMaster(dataWidth : Int) extends SpiMaster{
+case class EvalSpiCtrlIo(dataWidth:Int=24) extends Bundle with IMasterSlave {
+  val ss = Bool()
+  val mosi = Bool()
+  val sclk = Bool()
   val go = Bool()
-  val done = Bool()
-  val write = Flow (Bits(dataWidth bits))  // 输送数据
-  val read = Flow ((Bits(dataWidth bits)))  // 接收数据
+  val data = Bits(dataWidth bits)
 
   override def asMaster(): Unit = {
-    out(ss, sclk, mosi, done, read)
-    in(go, miso, write)
+    in(go, data)
+    out(ss, mosi, sclk)
   }
 }
 
-class EvalSpi(dataWidth : Int=24,
-              ClockDivide : Int = 4,
-              CPOL : Boolean=true,
-              CPHA : Boolean=false) extends Component{
-  val io = new EvalSpiMaster(dataWidth=dataWidth)
+class EvalSpiCtrl(dataWidth : Int = 24, ClockDivide : Int) extends Component {
+  val io = EvalSpiCtrlIo(dataWidth)
   io.asMaster()
-  io.read.setAll()
-//  val clk,rst_n = in Bool()
-//  val myClockDomain = ClockDomain(clk, rst_n)
-//  new ClockingArea(myClockDomain) {
-    val sclk = Reg(Bool())
-    val ss = Reg(Bits(1 bits))
-    val mosi = Reg(Bool())
-    val done = Reg(Bool())
+  val evalSpiCtrlGeneric = SpiMasterCtrlGenerics(ssWidth = 1, timerWidth = 4, dataWidth = dataWidth)
+  val evalSpiCtrl = SpiMasterCtrl(evalSpiCtrlGeneric)
+  val valid = Bool()
+  valid := myfunc.Delay.PulseByCycle(io.go, (2*(ClockDivide+1)) * (dataWidth) + 1)
+  io.ss := ~valid
+  io.mosi <> evalSpiCtrl.io.spi.mosi
+  io.sclk <> evalSpiCtrl.io.spi.sclk
 
-
-    val fsm = new StateMachine {
-      val IDLE = new State with EntryPoint
-      val LowSs = new State
-      val SendClk = new State
-
-      val counter = Reg(UInt(8 bits)) init (0)
-      val sclkCounter = Reg(UInt(8 bits)) init (0)
-      val dataCounter = Reg(UInt(5 bits)) init (0)
-
-      //    val go_delay = Reg(Bool())
-      //    go_delay.init(False)
-      //    val go_timeout = new Timeout(3)
-      //    when(io.go.rise(False)){
-      //      go_delay.set()
-      //    }
-
-      if (CPOL)
-        sclk.init(True)
-      else
-        sclk.init(False)
-      ss.init(B"1'b1")
-      mosi.init(False)
-      done.init(False)
-
-      IDLE
-        .onEntry(counter := 0)
-        .whenIsActive {
-          when(!(counter === ClockDivide+6)){
-          counter := counter + 1}
-          mosi.clear()
-          if (CPOL)
-            sclk.set()
-          else
-            sclk.clear()
-          when(counter === ClockDivide / 4) {
-            ss.setAll()
-          }
-          done := (counter === ClockDivide / 4 + 2) | (counter === ClockDivide / 4 + 3) | (counter === ClockDivide / 4 + 4) | (counter === ClockDivide / 4 + 5)
-          when(io.go & ss(0)) {
-            goto(LowSs)
-          }
-        }
-      LowSs
-        .onEntry(counter := 0)
-        .whenIsActive {
-          counter := counter + 1
-          when(counter === ClockDivide / 2 - 1) {
-            ss.clearAll()
-          }.elsewhen(counter === ClockDivide - 1) {
-            goto(SendClk)
-          }
-        }
-
-      SendClk
-        .onEntry {
-          sclkCounter := 0
-          if (CPHA) {
-            mosi := Reverse(io.mosiDataPayload).asBits(dataCounter)
-            dataCounter := 1
-          } else {
-            dataCounter := 0
-          }
-        }
-        .whenIsActive {
-          sclkCounter := sclkCounter + 1
-          when(sclkCounter === ClockDivide / 4 - 1) {
-
-          }.elsewhen(sclkCounter === ClockDivide / 2 - 1) {
-            sclk := !sclk
-            if (!CPHA) {
-              mosi := Reverse(io.mosiDataPayload).asBits(dataCounter)
-              dataCounter := dataCounter + 1
-            }
-          }.elsewhen(sclkCounter === ClockDivide / 4 * 3 - 1) {
-
-          }.elsewhen(sclkCounter === ClockDivide - 1) {
-            sclk := !sclk
-            sclkCounter := 0
-            if (CPHA) {
-              mosi := Reverse(io.mosiDataPayload).asBits(dataCounter)
-              dataCounter := dataCounter + 1
-            }
-            //when ((dataCounter === dataWidth + 1) & Bool(CPOL) | (dataCounter === dataWidth) & !Bool(CPOL))
-            when(dataCounter === dataWidth) {
-              goto(IDLE)
-            }
-          }
-        }
-    }
-    io.sclk := sclk
-    io.ss := ss
-    io.mosi := mosi
-    io.done := done
-//  }
+  //configure
+  evalSpiCtrl.io.config.kind.cpha := False
+  evalSpiCtrl.io.config.kind.cpol := True
+  evalSpiCtrl.io.config.sclkToogle := ClockDivide
+  evalSpiCtrl.io.config.ss.activeHigh := IntToBits(1)
+  evalSpiCtrl.io.config.ss.setup := 1
+  evalSpiCtrl.io.config.ss.hold := 1
+  evalSpiCtrl.io.config.ss.disable := 0
+  evalSpiCtrl.io.cmd.valid := valid
+  evalSpiCtrl.io.cmd.payload.mode := SpiMasterCtrlCmdMode.DATA
+  val args = RegInit(False)
+  evalSpiCtrl.io.cmd.payload.args := (args.asBits ## io.data)
 }
 
-object EvalSpiVerilog{
+object EvalSpiCtrlSim {
+  def main(args: Array[String]): Unit = {
+    SimConfig.withWave.doSim(new EvalSpiCtrl(8, 6)) {dut=>
+      dut.clockDomain.forkStimulus(20)
+      dut.io.go #= false
+      sleep(200)
+      def sendSpi(data:Int) : Unit = {
+        sleep(400)
+        dut.io.data #= data
+        dut.io.go #= true
+        sleep(40)
+        dut.io.go #= false
+        sleep(2000)
+        dut.io.go #= false
+        sleep(500)
+      }
+      sendSpi(1)
+      sendSpi(2)
+      sendSpi(4)
+      sendSpi(8)
+      sendSpi(16)
+      sendSpi(32)
+      sendSpi(64)
+      sendSpi(128)
+    }
+  }
+}
+
+object EvalSpiCtrlVerilog {
   def main(args: Array[String]): Unit = {
     SpinalConfig(mode = Verilog,
       defaultConfigForClockDomains = ClockDomainConfig(resetKind = ASYNC,
-                                                        clockEdge = RISING,
-                                                        resetActiveLevel = LOW),
-                                                        targetDirectory="../src")
-      .generate(new EvalSpi(24, ClockDivide = 4, CPOL = true, CPHA = true))
+                                                    clockEdge = RISING,
+                                                    resetActiveLevel = LOW),
+                                                  targetDirectory="../src")
+    .generate(new EvalSpiCtrl(24, 6))
   }
 }
